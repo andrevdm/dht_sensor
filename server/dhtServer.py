@@ -1,7 +1,10 @@
-import urllib
 import json
-from bottle import route, run, post, request
 import sqlite3
+from datetime import datetime
+
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 con = sqlite3.connect("/home/andre/dhtServer/dht.db")
 
@@ -11,18 +14,36 @@ with con:
 with con:
   con.execute("create index if not exists dht_source on dht (source)")
 
-@post('/dht')
-def dht():
-    d = json.load(request.body)
-    print("source: %d, temp: %3.1f, hum: %3.1f" %(d['id'], d['temp'], d['hum']))
+latestData = {}
+sourceMap = {202: 'isopod 1'}
 
-    with con:
-      con.execute("insert into dht (source, temp, hum) values (?, ?, ?)", (d['id'], d['temp'], d['hum']))
+async def dht(request):
+  d = await request.json()
+  #print("source: %d, temp: %3.1f, hum: %3.1f" %(d['id'], d['temp'], d['hum']))
+  now = datetime.now()
+  date_time = now.strftime("%m/%d/%Y, %H:%M:%S")
+  latestData[d['id']] = {'temp': d['temp'], 'hum': d['hum'], 'at': date_time}
 
-    #body1 = request.body.read();
-    #body = urllib.unquote(body1).decode('utf8')
-    #print(body)
-    return "logged.."
+  with con:
+    con.execute("insert into dht (source, temp, hum) values (?, ?, ?)", (d['id'], d['temp'], d['hum']))
 
-run(host='0.0.0.0', port=80, debug=True)
+  return JSONResponse({'success': True})
+
+
+async def latest(request):
+  #return latestData but lookup id from sourceMap
+  d = {}
+  for k, v in latestData.items():
+    v['source'] = k
+    if k in sourceMap:
+      d[sourceMap[k]] = v
+    else:
+      d[k] = v
+  return JSONResponse(d)
+
+
+app = Starlette(debug=True, routes=[
+  Route('/dht', dht, methods=['POST']),
+  Route('/latest', latest, methods=['GET'])
+])
 
