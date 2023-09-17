@@ -11,10 +11,6 @@ with con:
 with con:
   con.execute("create index if not exists dht_host on dht (host)")
 
-latestData = {}
-sourceMap = {202: 'isopod 1'}
-
-
 # The callback for when the client receives a CONNACK response from the server.
 def on_connect(client, userdata, flags, rc):
   print("Connected with result code "+str(rc))
@@ -39,35 +35,6 @@ client.on_message = on_message
 
 client.connect("192.168.68.201", 1883, 60)
 
-# Blocking call that processes network traffic, dispatches callbacks and
-# handles reconnecting.
-# Other loop*() functions are available that give a threaded interface and a
-# manual interface.
+# Blocking call that processes network traffic, dispatches callbacks and handles reconnecting.
+# Other loop*() functions are available that give a threaded interface and a manual interface.
 client.loop_forever()
-
-
-#async def dht(request):
-#  d = await request.json()
-#  print(d)
-#  now = datetime.now()
-#  date_time = now.strftime("%Y/%m/%d, %H:%M:%S")
-#  #latestData[d['id']] = {'temp': d['temp'], 'hum': d['hum'], 'at': date_time}
-#
-#  with con:
-#    con.execute("insert into dht (source, temp, hum) values (?, ?, ?)", (d['id'], d['temp'], d['hum']))
-#
-#  return JSONResponse({'success': True})
-
-
-#async def latest(request):
-#  #return latestData but lookup id from sourceMap
-#  d = {}
-#  for k, v in latestData.items():
-#    v['source'] = k
-#    v['at'] = v['at']
-#    if k in sourceMap:
-#      d[sourceMap[k]] = v
-#    else:
-#      d[k] = v
-#  print(d)
-#  return JSONResponse(d)
