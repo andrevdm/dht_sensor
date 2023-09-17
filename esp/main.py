@@ -15,6 +15,7 @@ sensor14.measure()
 import gc
 
 client_id = ubinascii.hexlify(machine.unique_id())
+client_id_str = ubinascii.hexlify(machine.unique_id()).decode('utf-8')
 
 print(ip)
 
@@ -57,7 +58,7 @@ while True:
       sensor14.measure()
       temp14 = sensor14.temperature()
       hum14 = sensor14.humidity()
-      data14 = '{"host": "%s", "sensor": %d, "temp": %3.1f, "hum": %3.1f}' %(ip, 14, temp14, hum14)
+      data14 = '{"host": "%s", "client_id": "%s", "sensor": %d, "temp": %3.1f, "hum": %3.1f}' %(ip, client_id_str, 14, temp14, hum14)
       print(data14)
 
       client.publish(topic_sensor_pub, data14)
