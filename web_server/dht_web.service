@@ -1,0 +1,11 @@
+#/etc/systemd/system/dht_web.service
+#sudo ln -s /home/andre/dhtHost/web_server/dht_web.service  /etc/systemd/system/dht_web.service
+
+[Unit]
+Description=DHT22WebServer
+
+[Service]
+ExecStart=/home/andre/dhtHost/web_server/server.sh
+
+[Install]
+WantedBy=multi-user.target
