@@ -49,6 +49,15 @@ except OSError as e:
 last_measure = 0
 measure_interval = 15
 
+
+
+try:
+  data = '{"host": "%s", "client_id": "%s", "event": "starting"}' %(ip, client_id_str)
+  client.publish("dht_sensor_events", data)
+except OSError as e:
+  print("OSError: %s" % e)
+
+
 wdt = machine.WDT(timeout = 15000)
 wdt.feed()
 
