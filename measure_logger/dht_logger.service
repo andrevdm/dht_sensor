@@ -1,0 +1,11 @@
+#/etc/systemd/system/dht_logger.service
+#sudo ln -s /home/andre/dhtHost/measure_logger/dht_logger.service  /etc/systemd/system/dht_logger.service
+
+[Unit]
+Description=DHT22LoggerServer
+
+[Service]
+ExecStart=/home/andre/dhtHost/measure_logger/logger_server.sh
+
+[Install]
+WantedBy=multi-user.target
