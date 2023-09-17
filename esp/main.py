@@ -49,8 +49,12 @@ except OSError as e:
 last_measure = 0
 measure_interval = 15
 
+wdt = machine.WDT(timeout = 15000)
+wdt.feed()
+
 while True:
   gc.collect()
+  wdt.feed()
 
   try:
     client.check_msg()
