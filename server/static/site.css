@@ -1,0 +1,29 @@
+table.darkTable {
+  border: 0px solid #64C8CB;
+  border-collapse: collapse;
+}
+
+table.darkTable tr {
+  border: solid #CCCCCC;
+  border-width: 1px 0;
+}
+
+table.darkTable td, table.darkTable th {
+  padding: 4px 3px;
+  vertical-align: top;
+}
+
+table.darkTable th {
+  text-align: right;
+  padding: 1px 1px;
+}
+
+table.darkTable thead th:first-child {
+  border-left: none;
+}
+
+table.darkTable tfoot td {
+  vertical-align: top;
+}
+
+}

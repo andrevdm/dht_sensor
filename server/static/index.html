@@ -1,0 +1,75 @@
+</html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DHT22</title>
+
+  <script defer src="https://unpkg.com/@alpinejs/mask@3.x.x/dist/cdn.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="/static/luxon.min.js"></script>
+  <script src="//cdnjs.cloudflare.com/ajax/libs/ramda/0.25.0/ramda.min.js"></script>
+  <script src="/static/site.js"></script>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-4bw+/aepP/YC94hEpVNVgiZdgIC5+VKNBQNGCHeKRQN+PtmoHDEXuppvnDJzQIu9" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+  <link rel="stylesheet" href="/static/site.css">
+</head>
+
+<body>
+  <div x-data="mkState()" x-init="await init()">
+    DHT22
+
+    <table class="table table-striped sortable">
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th>Temp</th>
+          <th>Humidity</th>
+          <th>At</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="l in latest" :key="l.source">
+          <tr>
+            <td><span x-text="l.source"></span></td>
+            <td><span x-text="l.temp"></span></td>
+            <td><span x-text="l.humidity"></span></td>
+            <td><span x-text="l.at"></span></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const DateTime = luxon.DateTime;
+
+    function mkState(){
+      return{
+        latest: [],
+
+        async init(){
+          const root = this;
+
+          const j = await fetch(`/latest`);
+          const data = [];
+
+          for(const l of Object.entries(await j.json())){
+            data.push({
+              source: l[0],
+              temp: l[1].temp,
+              humidity: l[1].hum,
+              at: l[1].at,
+            });
+          }
+
+          console.dir(data, {depth: null});
+          root.latest = data;
+        }
+      }
+    }
+  </script>
+</body>
+</html>

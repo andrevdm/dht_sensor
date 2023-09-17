@@ -1,0 +1,10 @@
+#/etc/systemd/system/dht.service
+
+[Unit]
+Description=DHT22Log
+
+[Service]
+ExecStart=/home/andre/dhtServer/server.sh
+
+[Install]
+WantedBy=multi-user.target
