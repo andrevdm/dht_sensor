@@ -1,4 +1,5 @@
 # boot.py -- run on boot-up
+import gc
 import machine
 import time
 import network
@@ -10,7 +11,6 @@ import esp
 
 esp.osdebug(None)
 
-import gc
 gc.collect()
 
 ssid = 'BobsHauntedGecko'
@@ -22,10 +22,28 @@ print('Connecting...')
 station = network.WLAN(network.STA_IF)
 
 station.active(True)
-station.connect(ssid, password)
 
-while station.isconnected() == False:
-  pass
+while True:
+    try:
+        station.connect(ssid, password)
+        # break
+    except OSError as e:
+        print(e)
+
+    if station.isconnected():
+        print('Connected')
+        break
+    else:
+        print('Trying again in 1 seconds')
+        time.sleep(1)
+
+
+# while station.isconnected() == False:
+#  pass
+
+
+net = network.WLAN(network.STA_IF)
+net.active(True)
 
 print('Connection successful')
 print(station.ifconfig())
