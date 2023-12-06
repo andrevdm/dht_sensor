@@ -15,7 +15,7 @@ gc.collect()
 
 ssid = 'BobsHauntedGecko'
 password = 'tkgr6073'
-mqtt_server = '192.168.68.201'
+mqtt_server = '192.168.68.199'
 
 print('Connecting...')
 
