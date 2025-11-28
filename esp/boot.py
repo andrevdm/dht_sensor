@@ -8,8 +8,8 @@ from umqttsimple import MQTTClient
 import ubinascii
 import micropython
 import esp
+import network
 
-esp.osdebug(None)
 
 gc.collect()
 
@@ -49,3 +49,13 @@ print('Connection successful')
 print(station.ifconfig())
 
 ip = station.ifconfig()[0]
+
+
+
+wlan = network.WLAN(network.STA_IF)
+wlan.active(True)
+
+mac = wlan.config('mac')
+print(':'.join('{:02x}'.format(b) for b in mac))
+
+esp.osdebug(None)
