@@ -12,7 +12,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.config import Config
 
 latestData = {}
-sourceMap = {"192.168.68.199": 'isopod 1'}
+sourceMap = {"10.0.0.31": 'out', "10.0.32": 'in'}
 
 
 def on_connect(client, userdata, flags, rc):
@@ -34,7 +34,7 @@ client = mqtt.Client()
 client.on_connect = on_connect
 client.on_message = on_message
 
-client.connect("192.168.68.199", 1883, 60)
+client.connect("mqtt.lan", 1883, 60)
 
 
 def mqtt_loop():
