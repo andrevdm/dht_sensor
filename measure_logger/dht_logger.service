@@ -3,6 +3,7 @@
 
 [Unit]
 Description=DHT22LoggerServer
+After=mosquitto.service network-online.target
 
 [Service]
 ExecStart=/home/andre/dhtHost/measure_logger/logger_server.sh
