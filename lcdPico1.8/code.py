@@ -61,6 +61,7 @@ AXIS_COLOR = 0x666666
 
 # Load smaller bitmap font for better fit
 font = bitmap_font.load_font("/fonts/MonaspaceNeon8.bdf")
+clock_font = bitmap_font.load_font("/fonts/MonaspaceNeon6.bdf")
 
 # OUT row (top)
 out_label = bitmap_label.Label(
@@ -77,6 +78,12 @@ in_label = bitmap_label.Label(
 in_label.x = 4
 in_label.y = 22
 group.append(in_label)
+
+# Small clock under IN row (HH:MM)
+clock_label = bitmap_label.Label(clock_font, text="--:--", color=INFO_COLOR, scale=1)
+clock_label.anchor_point = (1.0, 0.0)
+clock_label.anchored_position = (display.width - 4, 28)
+group.append(clock_label)
 
 # --- Single Sparkline ---
 # Dimensions for rotation=90 on 160x128: leave ~30px top for text
@@ -231,6 +238,14 @@ def fmt_line(prefix, temp, hum, ts):
 def update_ui():
     out_label.text = fmt_line("OUT", last_out["temp"], last_out["hum"], last_out["ts"])
     in_label.text = fmt_line("IN ", last_in["temp"], last_in["hum"], last_in["ts"])
+
+
+def update_clock():
+    try:
+        tm = time.localtime()
+        clock_label.text = f"{tm.tm_hour:02d}:{tm.tm_min:02d}"
+    except Exception:
+        pass
 
 
 # ---- WiFi ----
@@ -482,6 +497,8 @@ def ensure_mqtt():
 
 # Initial draw
 update_ui()
+# Initial clock draw
+update_clock()
 
 # Optional NTP once
 try:
@@ -489,11 +506,13 @@ try:
 
     ntp = adafruit_ntp.NTP(connect_wifi(), server="pool.ntp.org", tz_offset=0)
     rtc.RTC().datetime = ntp.datetime
+    update_clock()
 except Exception as e:
     print("NTP failed:", e)
 
 last_age_refresh = time.monotonic()
 last_bucket_fetch = 0
+last_clock_min = -1
 BUCKET_PERIOD = "1hours"
 BUCKET_COUNT = 32
 BUCKET_URL = "http://rpi5.lan:8071/bucket/{period}/{count}"
@@ -533,6 +552,15 @@ while True:
     if time.monotonic() - last_age_refresh > 10:
         update_ui()
         last_age_refresh = time.monotonic()
+
+    # refresh clock each minute
+    try:
+        tm = time.localtime()
+        if tm.tm_min != last_clock_min:
+            update_clock()
+            last_clock_min = tm.tm_min
+    except Exception:
+        pass
 
     # bucket fetch every 15 minutes
     if (session is not None) and (time.monotonic() - last_bucket_fetch > 900):
