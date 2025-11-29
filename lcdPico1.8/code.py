@@ -6,17 +6,22 @@ from fourwire import FourWire
 import adafruit_st7735r
 import terminalio
 import wifi, socketpool
+import adafruit_requests
 from adafruit_minimqtt import adafruit_minimqtt as MQTT
 from adafruit_display_shapes.sparkline import Sparkline
+from adafruit_display_shapes.line import Line
 import rtc
-
 
 MQTT_BROKER = "mqtt.lan"
 MQTT_PORT = 1883
 MQTT_TOPIC = "dht_sensor_measurement"
+MQTT_CTRL_TOPIC = "dht_sensor_lcd_control"
 
 HOST_OUT = "10.0.0.31"  # external
 HOST_IN = "10.0.0.32"  # internal
+
+# Config: select metric 'temp' or 'hum'
+METRIC = os.getenv("METRIC") or "temp"
 
 # ---- Display ----
 displayio.release_displays()
@@ -43,9 +48,14 @@ bg_palette[0] = 0x000000
 bg = displayio.TileGrid(bg_bitmap, pixel_shader=bg_palette, x=0, y=0)
 group.append(bg)
 
+# Charts group (on-screen)
+charts_group = displayio.Group()
+group.append(charts_group)
+
 OUT_COLOR = 0x3399FF
 IN_COLOR = 0x33CC66
 INFO_COLOR = 0xCCCCCC
+AXIS_COLOR = 0x666666
 
 # Load smaller bitmap font for better fit
 font = bitmap_font.load_font("/fonts/MonaspaceNeon8.bdf")
@@ -66,45 +76,131 @@ in_label.x = 4
 in_label.y = 22
 group.append(in_label)
 
-# --- Sparklines ---
+# --- Single Sparkline ---
 # Dimensions for rotation=90 on 160x128: leave ~30px top for text
 chart_width = display.width - 8
 chart_x = 4
+chart_y = 44  # center one chart below labels
+chart_h = 76  # taller single chart
 
-# Temperature chart (top): overlay two Sparkline series
 TEMP_MIN, TEMP_MAX = 10.0, 35.0
-spark_temp_in = Sparkline(
-    width=chart_width, height=40, max_items=chart_width, x=chart_x, y=36, color=IN_COLOR
-)
-spark_temp_out = Sparkline(
-    width=chart_width,
-    height=40,
-    max_items=chart_width,
-    x=chart_x,
-    y=36,
-    color=OUT_COLOR,
-)
-group.append(spark_temp_in)
-group.append(spark_temp_out)
-
-# Humidity chart (bottom): overlay two Sparkline series
 HUM_MIN, HUM_MAX = 20.0, 100.0
-spark_hum_in = Sparkline(
-    width=chart_width, height=40, max_items=chart_width, x=chart_x, y=80, color=IN_COLOR
-)
-spark_hum_out = Sparkline(
-    width=chart_width,
-    height=40,
-    max_items=chart_width,
-    x=chart_x,
-    y=80,
-    color=OUT_COLOR,
-)
-group.append(spark_hum_in)
-group.append(spark_hum_out)
+
+# Stage builder: one chart based on METRIC
+
+
+def build_staged_charts(buckets):
+    stage = displayio.Group()
+
+    # Collect metric values from buckets (IN + OUT)
+    vals = []
+    if buckets:
+        for item in buckets:
+            if METRIC == "hum":
+                iv = item.get("in_humidity")
+                ov = item.get("out_humidity")
+            else:
+                iv = item.get("in_temp")
+                ov = item.get("out_temp")
+            if iv is not None:
+                vals.append(float(iv))
+            if ov is not None:
+                vals.append(float(ov))
+
+    # Determine exact bounds (no padding)
+    if vals:
+        vmin = min(vals)
+        vmax = max(vals)
+    else:
+        vmin, vmax = (HUM_MIN, HUM_MAX) if METRIC == "hum" else (TEMP_MIN, TEMP_MAX)
+
+    if (vmax - vmin) < 1e-6:
+        vmax = vmin + 1.0
+
+    mid = (vmin + vmax) / 2.0
+
+    # Sparklines (IN/OUT overlaid)
+    sp_in = Sparkline(
+        width=chart_width,
+        height=chart_h,
+        max_items=chart_width,
+        x=chart_x,
+        y=chart_y,
+        color=IN_COLOR,
+    )
+    sp_out = Sparkline(
+        width=chart_width,
+        height=chart_h,
+        max_items=chart_width,
+        x=chart_x,
+        y=chart_y,
+        color=OUT_COLOR,
+    )
+    stage.append(sp_in)
+    stage.append(sp_out)
+
+    # Axis ticks and labels (top/mid/bottom) with one-decimal values
+    axis = (
+        (chart_y, f"{vmax:.1f}"),
+        (chart_y + chart_h // 2, f"{mid:.1f}"),
+        (chart_y + chart_h - 1, f"{vmin:.1f}"),
+    )
+    for y, text in axis:
+        stage.append(Line(chart_x - 2, y, chart_x + chart_width, y, AXIS_COLOR))
+        lbl = bitmap_label.Label(font, text=text, color=AXIS_COLOR, scale=1)
+        lbl.x = 0
+        lbl.y = y
+        stage.append(lbl)
+    # Right-edge subtle tick to indicate newest side
+    rx = chart_x + chart_width - 1
+    ry1 = chart_y + chart_h // 2 - 4
+    ry2 = chart_y + chart_h // 2 + 4
+    stage.append(Line(rx, ry1, rx, ry2, AXIS_COLOR))
+    # Subtle bottom baseline cue
+    stage.append(
+        Line(
+            chart_x,
+            chart_y + chart_h - 1,
+            chart_x + chart_width,
+            chart_y + chart_h - 1,
+            AXIS_COLOR,
+        )
+    )
+
+    # Fill series from buckets according to metric (reverse so newest on right)
+    if buckets:
+        for idx in range(len(buckets) - 1, -1, -1):
+            item = buckets[idx]
+            if METRIC == "hum":
+                iv = item.get("in_humidity")
+                ov = item.get("out_humidity")
+                if iv is not None:
+                    sp_in.add_value(norm(float(iv), vmin, vmax, sp_in.height))
+                if ov is not None:
+                    sp_out.add_value(norm(float(ov), vmin, vmax, sp_out.height))
+            else:
+                iv = item.get("in_temp")
+                ov = item.get("out_temp")
+                if iv is not None:
+                    sp_in.add_value(norm(float(iv), vmin, vmax, sp_in.height))
+                if ov is not None:
+                    sp_out.add_value(norm(float(ov), vmin, vmax, sp_out.height))
+    return stage
+
+
+def swap_charts(new_group):
+    global charts_group
+    try:
+        group.remove(charts_group)
+    except Exception:
+        pass
+    charts_group = new_group
+    group.append(charts_group)
 
 
 # Normalize helper
+
+
 def norm(val, vmin, vmax, height):
     if val is None:
         return None
@@ -132,6 +228,8 @@ def update_ui():
 
 
 # ---- WiFi ----
+
+
 def connect_wifi():
     ssid = os.getenv("CIRCUITPY_WIFI_SSID")
     pwd = os.getenv("CIRCUITPY_WIFI_PASSWORD")
@@ -142,13 +240,16 @@ def connect_wifi():
 
 
 pool = None
+session = None
 
 
 def ensure_wifi():
-    global pool
+    global pool, session
     try:
         if not pool:
             pool = connect_wifi()
+            # Build HTTP session for bucket fetches (http, no SSL)
+            session = adafruit_requests.Session(pool, None)
     except Exception as e:
         print("WiFi connect failed:", e)
         time.sleep(2)
@@ -158,25 +259,86 @@ mqtt = None
 
 
 def handle_message(client, topic, msg):
+    # Basic diagnostics
+    try:
+        print("MQTT msg:", topic, "len=", len(msg) if msg else 0)
+    except Exception:
+        pass
+
+    # Control topic handling
+    if topic == MQTT_CTRL_TOPIC:
+        print("CTRL recv:", msg)
+        try:
+            ctrl = json.loads(msg)
+        except Exception as e:
+            print("Bad JSON on", topic, ":", e)
+            return
+        m = ctrl.get("metric")
+        p = ctrl.get("period")
+        c = ctrl.get("count")
+        # Apply with validation
+        global METRIC, BUCKET_PERIOD, BUCKET_COUNT, last_bucket_fetch, last_age_refresh
+        if m in ("temp", "hum"):
+            METRIC = m
+        if isinstance(p, str) and p:
+            BUCKET_PERIOD = p
+        if isinstance(c, int):
+            max_items = chart_width
+            BUCKET_COUNT = max(1, min(c, max_items))
+        print("CTRL applied:", METRIC, BUCKET_PERIOD, BUCKET_COUNT)
+        # Immediate visual feedback: clear chart (axes only)
+        try:
+            empty_stage = build_staged_charts([])
+            swap_charts(empty_stage)
+        except Exception as e:
+            print("CTRL clear failed:", e)
+        # Reset timers and fetch now
+        last_age_refresh = time.monotonic()
+        try:
+            if session:
+                resp = session.get(
+                    BUCKET_URL.format(period=BUCKET_PERIOD, count=BUCKET_COUNT)
+                )
+                data = resp.json()
+                resp.close()
+                stage = build_staged_charts(data)
+                swap_charts(stage)
+                last_bucket_fetch = time.monotonic()
+        except Exception as e:
+            print("CTRL fetch failed:", e)
+        return
+
+    # Sensor topic handling
+    print("SENSOR recv")
     try:
         data = json.loads(msg)
     except Exception as e:
-        print("Bad JSON:", e)
+        print("Bad JSON on", topic, ":", e)
         return
 
     host = data.get("host")
     temp = data.get("temp")
     hum = data.get("hum")
-    ts = time.time()
 
+    if host is None:
+        print("SENSOR missing host; ignoring")
+        return
+
+    ts = time.time()
     if host == HOST_OUT:
-        last_out["temp"] = float(temp) if temp is not None else None
-        last_out["hum"] = float(hum) if hum is not None else None
-        last_out["ts"] = ts
+        if temp is not None:
+            last_out["temp"] = float(temp)
+        if hum is not None:
+            last_out["hum"] = float(hum)
+        if (temp is not None) or (hum is not None):
+            last_out["ts"] = ts
     elif host == HOST_IN:
-        last_in["temp"] = float(temp) if temp is not None else None
-        last_in["hum"] = float(hum) if hum is not None else None
-        last_in["ts"] = ts
+        if temp is not None:
+            last_in["temp"] = float(temp)
+        if hum is not None:
+            last_in["hum"] = float(hum)
+        if (temp is not None) or (hum is not None):
+            last_in["ts"] = ts
     else:
         print("Unknown host:", host)
         return
@@ -199,7 +361,8 @@ def ensure_mqtt():
             mqtt.on_message = handle_message
             mqtt.connect()
             mqtt.subscribe(MQTT_TOPIC)
-            print("MQTT connected/subscribed:", MQTT_TOPIC)
+            mqtt.subscribe(MQTT_CTRL_TOPIC)
+            print("MQTT connected/subscribed:", MQTT_TOPIC, MQTT_CTRL_TOPIC)
         except Exception as e:
             print("MQTT connect failed:", e)
             mqtt = None
@@ -219,9 +382,31 @@ except Exception as e:
     print("NTP failed:", e)
 
 last_age_refresh = time.monotonic()
+last_bucket_fetch = 0
+BUCKET_PERIOD = "1hours"
+BUCKET_COUNT = 32
+BUCKET_URL = "http://rpi5.lan:8071/bucket/{period}/{count}"
+
+# Initial bucket fetch
+try:
+    ensure_wifi()
+    if session:
+        url = BUCKET_URL.format(period=BUCKET_PERIOD, count=BUCKET_COUNT)
+        print("FETCH URL:", url)
+        resp = session.get(url)
+        data = resp.json()
+        resp.close()
+        # Build stage off-screen and swap in one go
+        stage = build_staged_charts(data)
+        swap_charts(stage)
+        last_bucket_fetch = time.monotonic()
+except Exception as e:
+    print("Bucket fetch failed:", e)
+
 while True:
     ensure_wifi()
     ensure_mqtt()
+    # keep mqtt responsive
     if mqtt:
         try:
             mqtt.loop()
@@ -232,8 +417,24 @@ while True:
             except Exception:
                 pass
             mqtt = None
+
     # refresh ages every ~10s
     if time.monotonic() - last_age_refresh > 10:
         update_ui()
         last_age_refresh = time.monotonic()
+
+    # bucket fetch every 15 minutes
+    if (session is not None) and (time.monotonic() - last_bucket_fetch > 900):
+        try:
+            resp = session.get(
+                BUCKET_URL.format(period=BUCKET_PERIOD, count=BUCKET_COUNT)
+            )
+            data = resp.json()
+            resp.close()
+            stage = build_staged_charts(data)
+            swap_charts(stage)
+            last_bucket_fetch = time.monotonic()
+        except Exception as e:
+            print("Bucket fetch failed:", e)
+
     time.sleep(0.1)
