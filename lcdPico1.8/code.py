@@ -96,7 +96,7 @@ def build_staged_charts(buckets):
     vals = []
     if buckets:
         for item in buckets:
-            if METRIC == "hum":
+            if METRIC == "hum" or METRIC == "humidity":
                 iv = item.get("in_humidity")
                 ov = item.get("out_humidity")
             else:
@@ -112,7 +112,11 @@ def build_staged_charts(buckets):
         vmin = min(vals)
         vmax = max(vals)
     else:
-        vmin, vmax = (HUM_MIN, HUM_MAX) if METRIC == "hum" else (TEMP_MIN, TEMP_MAX)
+        vmin, vmax = (
+            (HUM_MIN, HUM_MAX)
+            if METRIC in ("hum", "humidity")
+            else (TEMP_MIN, TEMP_MAX)
+        )
 
     if (vmax - vmin) < 1e-6:
         vmax = vmin + 1.0
@@ -171,7 +175,7 @@ def build_staged_charts(buckets):
     if buckets:
         for idx in range(len(buckets) - 1, -1, -1):
             item = buckets[idx]
-            if METRIC == "hum":
+            if METRIC in ("hum", "humidity"):
                 iv = item.get("in_humidity")
                 ov = item.get("out_humidity")
                 if iv is not None:
@@ -278,10 +282,27 @@ def handle_message(client, topic, msg):
         c = ctrl.get("count")
         # Apply with validation
         global METRIC, BUCKET_PERIOD, BUCKET_COUNT, last_bucket_fetch, last_age_refresh
-        if m in ("temp", "hum"):
-            METRIC = m
+        if m in ("temp", "hum", "humidity"):
+            METRIC = "temp" if m == "temp" else "hum"
         if isinstance(p, str) and p:
-            BUCKET_PERIOD = p
+            try:
+                ps = p.strip().lower()
+                i = 0
+                while i < len(ps) and ps[i].isdigit():
+                    i += 1
+                num = ps[:i] or "1"
+                unit = ps[i:]
+                if unit in ("min", "mins", "minute", "minutes"):
+                    unit = "minutes"
+                elif unit in ("hour", "hours"):
+                    unit = "hours"
+                elif unit in ("day", "days"):
+                    unit = "days"
+                elif unit in ("week", "weeks"):
+                    unit = "weeks"
+                BUCKET_PERIOD = f"{num}{unit}"
+            except Exception:
+                BUCKET_PERIOD = p
         if isinstance(c, int):
             max_items = chart_width
             BUCKET_COUNT = max(1, min(c, max_items))
