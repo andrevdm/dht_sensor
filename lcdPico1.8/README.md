@@ -1,0 +1,11 @@
+Scripted Uploads (iso-lcd.lan)
+- Upload code.py:
+  - curl --fail -u :changeme -X PUT --data-binary @code.py http://iso-lcd.lan/fs/code.py
+- Upload a library:
+  - curl --fail -u :changeme -X PUT --data-binary @lib/adafruit_minimqtt/adafruit_minimqtt.mpy http://iso-lcd.lan/fs/lib/adafruit_minimqtt/adafruit_minimqtt.mpy
+- Upload fonts/assets:
+  - curl --fail -u :changeme -X PUT --data-binary @fonts/MonaspaceNeon8.bdf http://iso-lcd.lan/fs/fonts/MonaspaceNeon8.bdf
+- List files:
+  - curl --fail -u :changeme http://iso-lcd.lan/fs/
+- Delete:
+  - curl --fail -u :changeme -X DELETE http://iso-lcd.lan/fs/lib/oldlib.mpy

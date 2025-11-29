@@ -16,6 +16,8 @@ MQTT_BROKER = "mqtt.lan"
 MQTT_PORT = 1883
 MQTT_TOPIC = "dht_sensor_measurement"
 MQTT_CTRL_TOPIC = "dht_sensor_lcd_control"
+MQTT_CONFIG_TOPIC = MQTT_CTRL_TOPIC  # reuse legacy control topic for config
+MQTT_ROTATION_TOPIC = "dht_sensor_lcd_rotation"
 
 HOST_OUT = "10.0.0.31"  # external
 HOST_IN = "10.0.0.32"  # internal
@@ -263,27 +265,41 @@ mqtt = None
 
 
 def handle_message(client, topic, msg):
+    global \
+        METRIC, \
+        BUCKET_PERIOD, \
+        BUCKET_COUNT, \
+        last_bucket_fetch, \
+        last_age_refresh, \
+        chart_width, \
+        chart_x, \
+        chart_y, \
+        chart_h
     # Basic diagnostics
     try:
         print("MQTT msg:", topic, "len=", len(msg) if msg else 0)
     except Exception:
         pass
 
-    # Control topic handling
-    if topic == MQTT_CTRL_TOPIC:
-        print("CTRL recv:", msg)
+    # New config topic handling
+    if topic == MQTT_CONFIG_TOPIC:
+        print("CONFIG recv:", msg)
         try:
-            ctrl = json.loads(msg)
+            cfg = json.loads(msg)
         except Exception as e:
             print("Bad JSON on", topic, ":", e)
             return
-        m = ctrl.get("metric")
-        p = ctrl.get("period")
-        c = ctrl.get("count")
-        # Apply with validation
-        global METRIC, BUCKET_PERIOD, BUCKET_COUNT, last_bucket_fetch, last_age_refresh
+        # Required fields
+        if not all(k in cfg for k in ("metric", "period", "count")):
+            print("CONFIG missing fields; ignoring")
+            return
+        m = cfg.get("metric")
+        p = cfg.get("period")
+        c = cfg.get("count")
+
         if m in ("temp", "hum", "humidity"):
             METRIC = "temp" if m == "temp" else "hum"
+        # Period normalization
         if isinstance(p, str) and p:
             try:
                 ps = p.strip().lower()
@@ -303,6 +319,72 @@ def handle_message(client, topic, msg):
                 BUCKET_PERIOD = f"{num}{unit}"
             except Exception:
                 BUCKET_PERIOD = p
+        if isinstance(c, int):
+            max_items = chart_width
+            BUCKET_COUNT = max(1, min(c, max_items))
+        print("CONFIG applied:", METRIC, BUCKET_PERIOD, BUCKET_COUNT)
+        # Immediate clear and fetch
+        try:
+            empty_stage = build_staged_charts([])
+            swap_charts(empty_stage)
+        except Exception as e:
+            print("CONFIG clear failed:", e)
+        last_age_refresh = time.monotonic()
+        try:
+            if session:
+                resp = session.get(
+                    BUCKET_URL.format(period=BUCKET_PERIOD, count=BUCKET_COUNT)
+                )
+                data = resp.json()
+                resp.close()
+                stage = build_staged_charts(data)
+                swap_charts(stage)
+                last_bucket_fetch = time.monotonic()
+        except Exception as e:
+            print("CONFIG fetch failed:", e)
+        return
+    # Rotation topic handling
+    if topic == MQTT_ROTATION_TOPIC:
+        print("ROTATION recv:", msg)
+        try:
+            rot_payload = json.loads(msg)
+        except Exception as e:
+            print("Bad JSON on", topic, ":", e)
+            return
+        rot = rot_payload.get("rotation")
+        if isinstance(rot, int) and rot in (0, 90, 180, 270):
+            try:
+                if display.rotation != rot:
+                    display.rotation = rot
+                    # Recalc layout dims
+                    # chart dimensions updated below; globals declared at function start
+                    chart_width = display.width - 8
+                    chart_x = 4
+                    chart_y = 44
+                    chart_h = (
+                        display.height - chart_y - 8
+                        if (display.height - chart_y - 8) > 10
+                        else chart_h
+                    )
+                    empty_stage = build_staged_charts([])
+                    swap_charts(empty_stage)
+                    # Optional fresh bucket fetch
+                    if session:
+                        resp = session.get(
+                            BUCKET_URL.format(period=BUCKET_PERIOD, count=BUCKET_COUNT)
+                        )
+                        data = resp.json()
+                        resp.close()
+                        stage = build_staged_charts(data)
+                        swap_charts(stage)
+                        last_bucket_fetch = time.monotonic()
+                print("ROTATION applied:", rot)
+            except Exception as e:
+                print("ROTATION apply failed:", e)
+        else:
+            print("ROTATION invalid:", rot)
+        return
+        # (Legacy control branch removed; unified config uses MQTT_CONFIG_TOPIC)
         if isinstance(c, int):
             max_items = chart_width
             BUCKET_COUNT = max(1, min(c, max_items))
@@ -382,8 +464,16 @@ def ensure_mqtt():
             mqtt.on_message = handle_message
             mqtt.connect()
             mqtt.subscribe(MQTT_TOPIC)
-            mqtt.subscribe(MQTT_CTRL_TOPIC)
-            print("MQTT connected/subscribed:", MQTT_TOPIC, MQTT_CTRL_TOPIC)
+            mqtt.subscribe(MQTT_CTRL_TOPIC)  # control/config (unified)
+            if MQTT_CONFIG_TOPIC != MQTT_CTRL_TOPIC:
+                mqtt.subscribe(MQTT_CONFIG_TOPIC)
+            mqtt.subscribe(MQTT_ROTATION_TOPIC)
+            print(
+                "MQTT connected/subscribed:",
+                MQTT_TOPIC,
+                MQTT_CTRL_TOPIC,
+                MQTT_ROTATION_TOPIC,
+            )
         except Exception as e:
             print("MQTT connect failed:", e)
             mqtt = None
