@@ -698,7 +698,7 @@ last_age_refresh = time.monotonic()
 last_bucket_fetch = 0
 last_clock_min = -1
 BUCKET_PERIOD = "1hours"
-BUCKET_COUNT = 32
+BUCKET_COUNT = 24
 BUCKET_URL = "http://rpi5.lan:8071/bucket/{period}/{count}"
 
 # Initial live bucket fetch

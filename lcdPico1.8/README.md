@@ -39,7 +39,7 @@ Examples
    mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m '{"mode":"auto","weekday_on":"07:00","weekday_off":"22:15","weekend_on":"09:30","weekend_off":"23:00"}'
 
 Config Topic JSON Fields
-{"metric":"temp"|"hum"|"humidity", "period":"1hours" (e.g. 15minutes, 2hours), "count":32}
+{"metric":"temp"|"hum"|"humidity", "period":"1hours" (e.g. 15minutes, 2hours), "count":24}
 
 Rotation Topic Example
 mqtt pub -h mqtt.lan -t dht_sensor_lcd_rotation -m '{"rotation":90}'
