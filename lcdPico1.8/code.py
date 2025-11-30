@@ -339,6 +339,102 @@ def manage_backlight():
             _backlight_printed = True
 
 
+def _bl_reload_env():
+    global \
+        BACKLIGHT_WEEKDAY_ON, \
+        BACKLIGHT_WEEKDAY_OFF, \
+        BACKLIGHT_WEEKEND_ON, \
+        BACKLIGHT_WEEKEND_OFF, \
+        _wd_on, \
+        _wd_off, \
+        _we_on, \
+        _we_off
+    BACKLIGHT_WEEKDAY_ON = os.getenv("BACKLIGHT_WEEKDAY_ON") or "07:30"
+    BACKLIGHT_WEEKDAY_OFF = os.getenv("BACKLIGHT_WEEKDAY_OFF") or "22:00"
+    BACKLIGHT_WEEKEND_ON = os.getenv("BACKLIGHT_WEEKEND_ON") or "10:00"
+    BACKLIGHT_WEEKEND_OFF = os.getenv("BACKLIGHT_WEEKEND_OFF") or "22:00"
+    _wd_on = _parse_hhmm(BACKLIGHT_WEEKDAY_ON)
+    _wd_off = _parse_hhmm(BACKLIGHT_WEEKDAY_OFF)
+    _we_on = _parse_hhmm(BACKLIGHT_WEEKEND_ON)
+    _we_off = _parse_hhmm(BACKLIGHT_WEEKEND_OFF)
+
+
+def _bl_apply_schedule(payload):
+    global \
+        BACKLIGHT_WEEKDAY_ON, \
+        BACKLIGHT_WEEKDAY_OFF, \
+        BACKLIGHT_WEEKEND_ON, \
+        BACKLIGHT_WEEKEND_OFF, \
+        _wd_on, \
+        _wd_off, \
+        _we_on, \
+        _we_off, \
+        _backlight_printed
+    changed = False
+    for key in ("weekday_on", "weekday_off", "weekend_on", "weekend_off"):
+        val = payload.get(key)
+        if isinstance(val, str) and ":" in val:
+            parsed = _parse_hhmm(val)
+            if parsed is None:
+                print("BKLT bad time", key, val)
+                continue
+            if key == "weekday_on":
+                BACKLIGHT_WEEKDAY_ON = val
+                _wd_on = parsed
+            elif key == "weekday_off":
+                BACKLIGHT_WEEKDAY_OFF = val
+                _wd_off = parsed
+            elif key == "weekend_on":
+                BACKLIGHT_WEEKEND_ON = val
+                _we_on = parsed
+            elif key == "weekend_off":
+                BACKLIGHT_WEEKEND_OFF = val
+                _we_off = parsed
+            changed = True
+    if changed:
+        print(
+            "BKLT schedule:",
+            BACKLIGHT_WEEKDAY_ON,
+            BACKLIGHT_WEEKDAY_OFF,
+            BACKLIGHT_WEEKEND_ON,
+            BACKLIGHT_WEEKEND_OFF,
+        )
+        _backlight_printed = False
+    return changed
+
+
+def _bl_set_mode(mode):
+    global _bl_override_mode, _backlight_printed
+    prev = _bl_override_mode or "auto"
+    if mode == "on":
+        _bl_override_mode = "on"
+    elif mode == "off":
+        _bl_override_mode = "off"
+    elif mode == "auto" or mode is None:
+        _bl_override_mode = None
+    if mode in ("on", "off", "auto"):
+        print("BKLT mode:", prev, "->", _bl_override_mode or "auto")
+        _backlight_printed = False
+    return prev, _bl_override_mode or "auto"
+
+
+def _bl_compute_and_apply():
+    tm = time.localtime()
+    active, reason = _compute_backlight(tm)
+    bl.value = active
+    print(
+        "BKLT state:",
+        f"{tm.tm_hour:02d}:{tm.tm_min:02d}",
+        "override",
+        _bl_override_mode or "auto",
+        "active",
+        1 if active else 0,
+        "reason",
+        reason,
+    )
+    return active
+
+
 # ---- WiFi ----
 
 
@@ -484,86 +580,32 @@ def handle_message(client, topic, msg):
 
     # Backlight override topic
     if topic == MQTT_BACKLIGHT_TOPIC:
-        global \
-            _bl_override_mode, \
-            _wd_on, \
-            _wd_off, \
-            _we_on, \
-            _we_off, \
-            BACKLIGHT_WEEKDAY_ON, \
-            BACKLIGHT_WEEKDAY_OFF, \
-            BACKLIGHT_WEEKEND_ON, \
-            BACKLIGHT_WEEKEND_OFF, \
-            _backlight_printed
+        global _bl_override_mode, _backlight_printed
         print("BKLT recv:", msg)
-        raw = (msg or "").strip()
-        lower = raw.lower()
-        changed_schedule = False
-        mode = None
-        data = None
-        if lower in ("on", "off", "auto"):
-            mode = lower
-        else:
-            try:
-                data = json.loads(raw)
-            except Exception as e:
-                print("BKLT JSON error:", e)
-                return
-            mode = (str(data.get("mode")) if data.get("mode") else "").lower()
-            for key in ("weekday_on", "weekday_off", "weekend_on", "weekend_off"):
-                val = data.get(key)
-                if isinstance(val, str) and ":" in val:
-                    parsed = _parse_hhmm(val)
-                    if parsed is None:
-                        print("BKLT bad time", key, val)
-                        continue
-                    if key == "weekday_on":
-                        BACKLIGHT_WEEKDAY_ON = val
-                        _wd_on = parsed
-                    elif key == "weekday_off":
-                        BACKLIGHT_WEEKDAY_OFF = val
-                        _wd_off = parsed
-                    elif key == "weekend_on":
-                        BACKLIGHT_WEEKEND_ON = val
-                        _we_on = parsed
-                    elif key == "weekend_off":
-                        BACKLIGHT_WEEKEND_OFF = val
-                        _we_off = parsed
-                    changed_schedule = True
-            if changed_schedule:
-                print(
-                    "BKLT schedule:",
-                    BACKLIGHT_WEEKDAY_ON,
-                    BACKLIGHT_WEEKDAY_OFF,
-                    BACKLIGHT_WEEKEND_ON,
-                    BACKLIGHT_WEEKEND_OFF,
-                )
-                _backlight_printed = False
-        prev = _bl_override_mode or "auto"
-        if mode == "on":
-            _bl_override_mode = "on"
-            _backlight_printed = False
-        elif mode == "off":
-            _bl_override_mode = "off"
-            _backlight_printed = False
-        elif mode == "auto":
+        try:
+            payload = json.loads(msg)
+        except Exception as e:
+            print("BKLT JSON error:", e)
+            return
+        mode = (str(payload.get("mode")) if payload.get("mode") else "").lower()
+        if mode == "reset":
+            _bl_reload_env()
             _bl_override_mode = None
             _backlight_printed = False
-        if mode in ("on", "off", "auto"):
-            print("BKLT mode:", prev, "->", _bl_override_mode or "auto")
-        tm = time.localtime()
-        active, reason = _compute_backlight(tm)
-        print(
-            "BKLT state:",
-            f"{tm.tm_hour:02d}:{tm.tm_min:02d}",
-            "override",
-            _bl_override_mode or "auto",
-            "active",
-            1 if active else 0,
-            "reason",
-            reason,
-        )
-        bl.value = active
+            print(
+                "BKLT reset: override cleared; schedule restored:",
+                BACKLIGHT_WEEKDAY_ON,
+                BACKLIGHT_WEEKDAY_OFF,
+                BACKLIGHT_WEEKEND_ON,
+                BACKLIGHT_WEEKEND_OFF,
+            )
+            _bl_compute_and_apply()
+            return
+        # Apply any schedule changes first
+        _bl_apply_schedule(payload)
+        # Apply mode change
+        _bl_set_mode(mode)
+        _bl_compute_and_apply()
         return
 
     # Sensor topic handling

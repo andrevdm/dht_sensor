@@ -16,25 +16,27 @@ MQTT Topics
 - Rotation control: dht_sensor_lcd_rotation
 - Backlight override & schedule: dht_sensor_lcd_backlight
 
-Backlight Override
-- Modes: on, off, auto (auto = follow weekday/weekend schedule)
+Backlight Control (JSON only)
+- Publish JSON to topic dht_sensor_lcd_backlight
+- Fields: "mode": "on" | "off" | "auto" | "reset"; optional "weekday_on","weekday_off","weekend_on","weekend_off" (HH:MM)
+- "reset" reloads env/default times and clears override (returns to auto).
 - Non-retained publishes recommended so reboot returns to schedule.
 
 Examples
 1. Force backlight ON:
-   mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m on
+   mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m '{"mode":"on"}'
 2. Force backlight OFF:
-   mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m off
-3. Return to scheduled auto:
-   mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m auto
-4. JSON with override:
    mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m '{"mode":"off"}'
-5. Update weekday schedule (keep auto):
-   mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m '{"weekday_on":"07:15","weekday_off":"21:45"}'
-6. Update weekend schedule:
-   mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m '{"weekend_on":"09:30","weekend_off":"23:00"}'
-7. Combined schedule + override:
+3. Return to scheduled auto:
+   mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m '{"mode":"auto"}'
+4. Reset (restore times + auto):
+   mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m '{"mode":"reset"}'
+5. Update weekday schedule (stay auto):
+   mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m '{"weekday_on":"06:45","weekday_off":"23:15"}'
+6. Update weekend schedule and force ON:
    mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m '{"mode":"on","weekend_on":"09:00","weekend_off":"22:30"}'
+7. Change both schedules (auto):
+   mqtt pub -h mqtt.lan -t dht_sensor_lcd_backlight -m '{"mode":"auto","weekday_on":"07:00","weekday_off":"22:15","weekend_on":"09:30","weekend_off":"23:00"}'
 
 Config Topic JSON Fields
 {"metric":"temp"|"hum"|"humidity", "period":"1hours" (e.g. 15minutes, 2hours), "count":32}
