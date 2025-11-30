@@ -20,6 +20,7 @@ MQTT_TOPIC = "dht_sensor_measurement"
 MQTT_CTRL_TOPIC = "dht_sensor_lcd_control"
 MQTT_CONFIG_TOPIC = MQTT_CTRL_TOPIC  # reuse legacy control topic for config
 MQTT_ROTATION_TOPIC = "dht_sensor_lcd_rotation"
+MQTT_BACKLIGHT_TOPIC = "dht_sensor_lcd_backlight"
 
 HOST_OUT = "10.0.0.31"  # external
 HOST_IN = "10.0.0.32"  # internal
@@ -291,40 +292,45 @@ def _is_dst_ireland(tm):
 
 
 _backlight_printed = False
+_bl_override_mode = None  # 'on','off', or None for auto
+
+
+def _compute_backlight(tm=None):
+    global _bl_override_mode, _wd_on, _wd_off, _we_on, _we_off
+    if tm is None:
+        tm = time.localtime()
+    mins = tm.tm_hour * 60 + tm.tm_min
+    if _bl_override_mode == "on":
+        return True, "override:on"
+    if _bl_override_mode == "off":
+        return False, "override:off"
+    on_min = _we_on if tm.tm_wday >= 5 else _wd_on
+    off_min = _we_off if tm.tm_wday >= 5 else _wd_off
+    if (on_min is not None) and (off_min is not None):
+        if on_min <= off_min:
+            return (mins >= on_min) and (mins < off_min), f"schedule:{on_min}-{off_min}"
+        else:
+            return (mins >= on_min) or (mins < off_min), f"wrap:{on_min}-{off_min}"
+    return True, "fallback"
 
 
 def manage_backlight():
-    global _backlight_printed
+    global _backlight_printed, _bl_override_mode
     try:
         tm = time.localtime()
-        # Determine effective local offset (UTC assumed in RTC; Ireland: standard 0, DST +1)
-        dst = _is_dst_ireland(tm)
-        # Apply DST by constructing effective hour for schedule comparison
-        effective_hour = (tm.tm_hour + (1 if dst else 0)) % 24
-        mins = effective_hour * 60 + tm.tm_min
-        is_weekend = tm.tm_wday >= 5
-        if is_weekend:
-            on_min = _we_on
-            off_min = _we_off
-        else:
-            on_min = _wd_on
-            off_min = _wd_off
-        active = True
-        if (on_min is not None) and (off_min is not None):
-            if on_min <= off_min:
-                active = (mins >= on_min) and (mins < off_min)
-            else:
-                active = (mins >= on_min) or (mins < off_min)
+        active, reason = _compute_backlight(tm)
         bl.value = active
         if not _backlight_printed:
             print(
                 "LOCAL",
                 f"{tm.tm_year:04d}-{tm.tm_mon:02d}-{tm.tm_mday:02d} "
-                f"{effective_hour:02d}:{tm.tm_min:02d}:{tm.tm_sec:02d}",
-                "DST",
-                1 if dst else 0,
+                f"{tm.tm_hour:02d}:{tm.tm_min:02d}:{tm.tm_sec:02d}",
                 "BL",
                 "ON" if active else "OFF",
+                "OVR",
+                _bl_override_mode or "auto",
+                "RSN",
+                reason,
             )
             _backlight_printed = True
     except Exception as e:
@@ -365,20 +371,11 @@ mqtt = None
 
 
 def handle_message(client, topic, msg):
-    global \
-        METRIC, \
-        BUCKET_PERIOD, \
-        BUCKET_COUNT, \
-        last_bucket_fetch, \
-        last_age_refresh, \
-        chart_width, \
-        chart_x, \
-        chart_y, \
-        chart_h
+    global METRIC, BUCKET_PERIOD, BUCKET_COUNT, last_bucket_fetch, last_age_refresh, chart_width, chart_x, chart_y, chart_h
     # Basic diagnostics
-    #try:
+    # try:
     #    print("MQTT msg:", topic, "len=", len(msg) if msg else 0)
-    #except Exception:
+    # except Exception:
     #    pass
 
     # New config topic handling
@@ -485,8 +482,92 @@ def handle_message(client, topic, msg):
             print("ROTATION invalid:", rot)
         return
 
+    # Backlight override topic
+    if topic == MQTT_BACKLIGHT_TOPIC:
+        global \
+            _bl_override_mode, \
+            _wd_on, \
+            _wd_off, \
+            _we_on, \
+            _we_off, \
+            BACKLIGHT_WEEKDAY_ON, \
+            BACKLIGHT_WEEKDAY_OFF, \
+            BACKLIGHT_WEEKEND_ON, \
+            BACKLIGHT_WEEKEND_OFF, \
+            _backlight_printed
+        print("BKLT recv:", msg)
+        raw = (msg or "").strip()
+        lower = raw.lower()
+        changed_schedule = False
+        mode = None
+        data = None
+        if lower in ("on", "off", "auto"):
+            mode = lower
+        else:
+            try:
+                data = json.loads(raw)
+            except Exception as e:
+                print("BKLT JSON error:", e)
+                return
+            mode = (str(data.get("mode")) if data.get("mode") else "").lower()
+            for key in ("weekday_on", "weekday_off", "weekend_on", "weekend_off"):
+                val = data.get(key)
+                if isinstance(val, str) and ":" in val:
+                    parsed = _parse_hhmm(val)
+                    if parsed is None:
+                        print("BKLT bad time", key, val)
+                        continue
+                    if key == "weekday_on":
+                        BACKLIGHT_WEEKDAY_ON = val
+                        _wd_on = parsed
+                    elif key == "weekday_off":
+                        BACKLIGHT_WEEKDAY_OFF = val
+                        _wd_off = parsed
+                    elif key == "weekend_on":
+                        BACKLIGHT_WEEKEND_ON = val
+                        _we_on = parsed
+                    elif key == "weekend_off":
+                        BACKLIGHT_WEEKEND_OFF = val
+                        _we_off = parsed
+                    changed_schedule = True
+            if changed_schedule:
+                print(
+                    "BKLT schedule:",
+                    BACKLIGHT_WEEKDAY_ON,
+                    BACKLIGHT_WEEKDAY_OFF,
+                    BACKLIGHT_WEEKEND_ON,
+                    BACKLIGHT_WEEKEND_OFF,
+                )
+                _backlight_printed = False
+        prev = _bl_override_mode or "auto"
+        if mode == "on":
+            _bl_override_mode = "on"
+            _backlight_printed = False
+        elif mode == "off":
+            _bl_override_mode = "off"
+            _backlight_printed = False
+        elif mode == "auto":
+            _bl_override_mode = None
+            _backlight_printed = False
+        if mode in ("on", "off", "auto"):
+            print("BKLT mode:", prev, "->", _bl_override_mode or "auto")
+        tm = time.localtime()
+        active, reason = _compute_backlight(tm)
+        print(
+            "BKLT state:",
+            f"{tm.tm_hour:02d}:{tm.tm_min:02d}",
+            "override",
+            _bl_override_mode or "auto",
+            "active",
+            1 if active else 0,
+            "reason",
+            reason,
+        )
+        bl.value = active
+        return
+
     # Sensor topic handling
-    print("SENSOR recv")
+    # print("SENSOR recv")
     try:
         data = json.loads(msg)
     except Exception as e:
@@ -542,6 +623,7 @@ def ensure_mqtt():
             if MQTT_CONFIG_TOPIC != MQTT_CTRL_TOPIC:
                 mqtt.subscribe(MQTT_CONFIG_TOPIC)
             mqtt.subscribe(MQTT_ROTATION_TOPIC)
+            mqtt.subscribe(MQTT_BACKLIGHT_TOPIC)
             print(
                 "MQTT connected/subscribed:",
                 MQTT_TOPIC,
