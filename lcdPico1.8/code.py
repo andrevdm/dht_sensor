@@ -4,11 +4,13 @@ from adafruit_display_text import bitmap_label
 from adafruit_bitmap_font import bitmap_font
 from fourwire import FourWire
 import adafruit_st7735r
-import terminalio
+
+# terminalio removed (unused)
 import wifi, socketpool
 import adafruit_requests
 from adafruit_minimqtt import adafruit_minimqtt as MQTT
-from adafruit_display_shapes.sparkline import Sparkline
+
+# removed unused Sparkline import
 from adafruit_display_shapes.line import Line
 import rtc
 
@@ -85,7 +87,7 @@ clock_label.anchor_point = (1.0, 0.0)
 clock_label.anchored_position = (display.width - 4, 28)
 group.append(clock_label)
 
-# --- Single Sparkline ---
+# Chart dimensions
 # Dimensions for rotation=90 on 160x128: leave ~30px top for text
 chart_width = display.width - 8
 chart_x = 4
@@ -250,6 +252,87 @@ def update_clock():
         pass
 
 
+# Backlight schedule (weekday/weekend)
+BACKLIGHT_WEEKDAY_ON = os.getenv("BACKLIGHT_WEEKDAY_ON") or "07:30"
+BACKLIGHT_WEEKDAY_OFF = os.getenv("BACKLIGHT_WEEKDAY_OFF") or "22:00"
+BACKLIGHT_WEEKEND_ON = os.getenv("BACKLIGHT_WEEKEND_ON") or "10:00"
+BACKLIGHT_WEEKEND_OFF = os.getenv("BACKLIGHT_WEEKEND_OFF") or "22:00"
+
+
+def _parse_hhmm(s):
+    try:
+        h, m = s.split(":")
+        h = int(h)
+        m = int(m)
+        if 0 <= h < 24 and 0 <= m < 60:
+            return h * 60 + m
+    except Exception:
+        return None
+    return None
+
+
+_wd_on = _parse_hhmm(BACKLIGHT_WEEKDAY_ON)
+_wd_off = _parse_hhmm(BACKLIGHT_WEEKDAY_OFF)
+_we_on = _parse_hhmm(BACKLIGHT_WEEKEND_ON)
+_we_off = _parse_hhmm(BACKLIGHT_WEEKEND_OFF)
+
+
+def _is_dst_ireland(tm):
+    # Ultra-minimal approximation: DST active April–September inclusive.
+    # Plus: in March if day >=25; in October if day <25. Ignores exact Sunday/01:00 boundaries.
+    mon = tm.tm_mon
+    if 4 <= mon <= 9:
+        return True
+    if mon == 3 and tm.tm_mday >= 25:
+        return True
+    if mon == 10 and tm.tm_mday < 25:
+        return True
+    return False
+
+
+_backlight_printed = False
+
+
+def manage_backlight():
+    global _backlight_printed
+    try:
+        tm = time.localtime()
+        # Determine effective local offset (UTC assumed in RTC; Ireland: standard 0, DST +1)
+        dst = _is_dst_ireland(tm)
+        # Apply DST by constructing effective hour for schedule comparison
+        effective_hour = (tm.tm_hour + (1 if dst else 0)) % 24
+        mins = effective_hour * 60 + tm.tm_min
+        is_weekend = tm.tm_wday >= 5
+        if is_weekend:
+            on_min = _we_on
+            off_min = _we_off
+        else:
+            on_min = _wd_on
+            off_min = _wd_off
+        active = True
+        if (on_min is not None) and (off_min is not None):
+            if on_min <= off_min:
+                active = (mins >= on_min) and (mins < off_min)
+            else:
+                active = (mins >= on_min) or (mins < off_min)
+        bl.value = active
+        if not _backlight_printed:
+            print(
+                "LOCAL",
+                f"{tm.tm_year:04d}-{tm.tm_mon:02d}-{tm.tm_mday:02d} "
+                f"{effective_hour:02d}:{tm.tm_min:02d}:{tm.tm_sec:02d}",
+                "DST",
+                1 if dst else 0,
+                "BL",
+                "ON" if active else "OFF",
+            )
+            _backlight_printed = True
+    except Exception as e:
+        if not _backlight_printed:
+            print("Backlight sched error:", e)
+            _backlight_printed = True
+
+
 # ---- WiFi ----
 
 
@@ -293,10 +376,10 @@ def handle_message(client, topic, msg):
         chart_y, \
         chart_h
     # Basic diagnostics
-    try:
-        print("MQTT msg:", topic, "len=", len(msg) if msg else 0)
-    except Exception:
-        pass
+    #try:
+    #    print("MQTT msg:", topic, "len=", len(msg) if msg else 0)
+    #except Exception:
+    #    pass
 
     # New config topic handling
     if topic == MQTT_CONFIG_TOPIC:
@@ -395,37 +478,11 @@ def handle_message(client, topic, msg):
                         stage = build_staged_charts(data)
                         swap_charts(stage)
                         last_bucket_fetch = time.monotonic()
-                print("ROTATION applied:", rot)
+                # rotation applied (quiet)
             except Exception as e:
                 print("ROTATION apply failed:", e)
         else:
             print("ROTATION invalid:", rot)
-        return
-        # (Legacy control branch removed; unified config uses MQTT_CONFIG_TOPIC)
-        if isinstance(c, int):
-            max_items = chart_width
-            BUCKET_COUNT = max(1, min(c, max_items))
-        print("CTRL applied:", METRIC, BUCKET_PERIOD, BUCKET_COUNT)
-        # Immediate visual feedback: clear chart (axes only)
-        try:
-            empty_stage = build_staged_charts([])
-            swap_charts(empty_stage)
-        except Exception as e:
-            print("CTRL clear failed:", e)
-        # Reset timers and fetch now
-        last_age_refresh = time.monotonic()
-        try:
-            if session:
-                resp = session.get(
-                    BUCKET_URL.format(period=BUCKET_PERIOD, count=BUCKET_COUNT)
-                )
-                data = resp.json()
-                resp.close()
-                stage = build_staged_charts(data)
-                swap_charts(stage)
-                last_bucket_fetch = time.monotonic()
-        except Exception as e:
-            print("CTRL fetch failed:", e)
         return
 
     # Sensor topic handling
@@ -500,6 +557,7 @@ def ensure_mqtt():
 # Initial draw
 update_ui()
 # Initial clock draw
+manage_backlight()
 update_clock()
 
 # Optional NTP once
@@ -559,6 +617,7 @@ while True:
         tm = time.localtime()
         if tm.tm_min != last_clock_min:
             update_clock()
+            manage_backlight()
             last_clock_min = tm.tm_min
     except Exception:
         pass
