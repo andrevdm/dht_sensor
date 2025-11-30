@@ -132,25 +132,9 @@ def build_staged_charts(buckets):
 
     mid = (vmin + vmax) / 2.0
 
-    # Sparklines (IN/OUT overlaid)
-    sp_in = Sparkline(
-        width=chart_width,
-        height=chart_h,
-        max_items=chart_width,
-        x=chart_x,
-        y=chart_y,
-        color=IN_COLOR,
-    )
-    sp_out = Sparkline(
-        width=chart_width,
-        height=chart_h,
-        max_items=chart_width,
-        x=chart_x,
-        y=chart_y,
-        color=OUT_COLOR,
-    )
-    stage.append(sp_in)
-    stage.append(sp_out)
+    # Manual polyline rendering replaces Sparkline; collect points then draw segments
+    in_coords = []
+    out_coords = []
 
     # Axis ticks and labels (top/mid/bottom) with one-decimal values
     axis = (
@@ -180,25 +164,41 @@ def build_staged_charts(buckets):
         )
     )
 
-    # Fill series from buckets according to metric (forward so newest ends up on the right)
+    # Plot buckets newest-on-right (API assumed newest-first; reverse for left→right chronological)
     if buckets:
-        # Forward iteration: add oldest first, newest last -> newest at rightmost pixel
-        for idx in range(0, len(buckets)):
-            item = buckets[idx]
+        ordered = list(reversed(buckets))  # oldest first, newest last
+        raw_in = []
+        raw_out = []
+        for item in ordered:
             if METRIC in ("hum", "humidity"):
                 iv = item.get("in_humidity")
                 ov = item.get("out_humidity")
-                if iv is not None:
-                    sp_in.add_value(norm(float(iv), vmin, vmax, sp_in.height))
-                if ov is not None:
-                    sp_out.add_value(norm(float(ov), vmin, vmax, sp_out.height))
             else:
                 iv = item.get("in_temp")
                 ov = item.get("out_temp")
-                if iv is not None:
-                    sp_in.add_value(norm(float(iv), vmin, vmax, sp_in.height))
-                if ov is not None:
-                    sp_out.add_value(norm(float(ov), vmin, vmax, sp_out.height))
+            if (iv is None) or (ov is None):
+                continue
+            raw_in.append(norm(float(iv), vmin, vmax, chart_h))
+            raw_out.append(norm(float(ov), vmin, vmax, chart_h))
+        ln = min(len(raw_in), len(raw_out))
+        if ln > 1:
+            for i in range(ln):
+                x = chart_x + int(i * (chart_width - 1) / (ln - 1))
+                in_coords.append((x, chart_y + raw_in[i]))
+                out_coords.append((x, chart_y + raw_out[i]))
+        elif ln == 1:
+            x = chart_x + (chart_width // 2)
+            in_coords.append((x, chart_y + raw_in[0]))
+            out_coords.append((x, chart_y + raw_out[0]))
+        # Draw OUT then IN
+        for i in range(1, len(out_coords)):
+            x1, y1 = out_coords[i - 1]
+            x2, y2 = out_coords[i]
+            stage.append(Line(x1, y1, x2, y2, OUT_COLOR))
+        for i in range(1, len(in_coords)):
+            x1, y1 = in_coords[i - 1]
+            x2, y2 = in_coords[i]
+            stage.append(Line(x1, y1, x2, y2, IN_COLOR))
     return stage
 
 
@@ -300,7 +300,7 @@ def handle_message(client, topic, msg):
 
     # New config topic handling
     if topic == MQTT_CONFIG_TOPIC:
-        print("CONFIG recv:", msg)
+        # CONFIG recv removed debug
         try:
             cfg = json.loads(msg)
         except Exception as e:
@@ -519,7 +519,7 @@ BUCKET_PERIOD = "1hours"
 BUCKET_COUNT = 32
 BUCKET_URL = "http://rpi5.lan:8071/bucket/{period}/{count}"
 
-# Initial bucket fetch
+# Initial live bucket fetch
 try:
     ensure_wifi()
     if session:
@@ -528,17 +528,16 @@ try:
         resp = session.get(url)
         data = resp.json()
         resp.close()
-        # Build stage off-screen and swap in one go
         stage = build_staged_charts(data)
         swap_charts(stage)
         last_bucket_fetch = time.monotonic()
 except Exception as e:
     print("Bucket fetch failed:", e)
 
+# Main loop
 while True:
     ensure_wifi()
     ensure_mqtt()
-    # keep mqtt responsive
     if mqtt:
         try:
             mqtt.loop()
