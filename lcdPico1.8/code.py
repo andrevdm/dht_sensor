@@ -180,9 +180,10 @@ def build_staged_charts(buckets):
         )
     )
 
-    # Fill series from buckets according to metric (reverse so newest on right)
+    # Fill series from buckets according to metric (forward so newest ends up on the right)
     if buckets:
-        for idx in range(len(buckets) - 1, -1, -1):
+        # Forward iteration: add oldest first, newest last -> newest at rightmost pixel
+        for idx in range(0, len(buckets)):
             item = buckets[idx]
             if METRIC in ("hum", "humidity"):
                 iv = item.get("in_humidity")
@@ -221,7 +222,8 @@ def norm(val, vmin, vmax, height):
         val = vmin
     if val > vmax:
         val = vmax
-    return int((val - vmin) * (height - 1) / (vmax - vmin))
+    # Invert mapping: higher values -> smaller y offset (toward top labeled vmax)
+    return (height - 1) - int((val - vmin) * (height - 1) / (vmax - vmin))
 
 
 last_out = {"temp": None, "hum": None, "ts": None}
