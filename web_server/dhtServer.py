@@ -69,12 +69,13 @@ async def homepage(request):
 
 
 # PostgreSQL bucketed average query
+# Use psycopg/psycopg2 param style (%s)
 PSQL_BUCKET_SQL = """
 WITH bucketed AS (
   SELECT
     host,
     to_timestamp(
-      floor(extract(epoch FROM ts) / $1) * $1
+      floor(extract(epoch FROM ts) / %s) * %s
     ) AS bucket_start,
     temp,
     hum
@@ -89,7 +90,7 @@ SELECT
 FROM bucketed
 GROUP BY bucket_start
 ORDER BY bucket_start DESC
-LIMIT $2;
+LIMIT %s;
 """
 
 
@@ -129,25 +130,18 @@ async def bucket(request):
 
     bucket_seconds = value * unit_map[unit]
 
-    # Use PostgreSQL via psycopg/psycopg2
+    # Use PostgreSQL via psycopg2 only
     try:
-        try:
-            import psycopg
+        import psycopg2
 
-            conn = psycopg.connect(PSQL_DSN)
-            use_psycopg3 = True
-        except Exception:
-            import psycopg2
-
-            conn = psycopg2.connect(PSQL_DSN)
-            use_psycopg3 = False
+        conn = psycopg2.connect(PSQL_DSN)
     except Exception as e:
         return JSONResponse({"error": f"psql connection failed: {e}"}, status_code=500)
 
     try:
         cur = conn.cursor()
         # Execute with parameters: bucket_seconds and num
-        cur.execute(PSQL_BUCKET_SQL, (bucket_seconds, num))
+        cur.execute(PSQL_BUCKET_SQL, (bucket_seconds, bucket_seconds, num))
         rows = cur.fetchall()
     except Exception as e:
         try:
