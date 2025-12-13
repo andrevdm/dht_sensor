@@ -1,5 +1,4 @@
 import json
-import sqlite3
 from datetime import datetime
 import paho.mqtt.client as mqtt
 from threading import Thread
@@ -14,24 +13,8 @@ from starlette.config import Config
 # Config will be read from environment variables and/or ".env" files.
 config = Config(".env")
 DEBUG = config("DEBUG", cast=bool, default=False)
-DB_PATH = config("DB_PATH", default="../db/dht.db")
 
-# Initialize SQLite for better concurrency (WAL mode)
-_con = None
-try:
-    _con = sqlite3.connect(DB_PATH, timeout=3.0)
-    _cur = _con.cursor()
-    _cur.execute("PRAGMA journal_mode=WAL;")
-    _cur.execute("PRAGMA busy_timeout=3000;")
-    _con.commit()
-except Exception:
-    pass
-finally:
-    if _con is not None:
-        try:
-            _con.close()
-        except Exception:
-            pass
+PSQL_DSN = "postgresql://metrics:m3tr1cs2o25@psql.lan/metrics?sslmode=disable"
 
 latestData = {}
 sourceMap = {"10.0.0.31": "out", "10.0.0.32": "in"}
@@ -43,7 +26,6 @@ def on_connect(client, userdata, flags, rc):
 
 
 def on_message(client, userdata, msg):
-    # print(msg.topic);
     d = json.loads(msg.payload)
     now = datetime.now()
     date_time = now.strftime("%Y/%m/%d, %H:%M:%S")
@@ -86,19 +68,17 @@ async def homepage(request):
     return FileResponse("static/index.html")
 
 
-# :bucket_seconds  = bucket size in seconds (60, 300, 3600, 86400, ...)
-# :n_buckets       = how many buckets you want (e.g. 50)
-bucket_avg_sql = """
+# PostgreSQL bucketed average query
+PSQL_BUCKET_SQL = """
 WITH bucketed AS (
   SELECT
     host,
-    datetime(
-      (strftime('%s', ts) / :bucket_seconds) * :bucket_seconds,
-      'unixepoch'
+    to_timestamp(
+      floor(extract(epoch FROM ts) / $1) * $1
     ) AS bucket_start,
     temp,
     hum
-  FROM dht
+  FROM iso.dht
 )
 SELECT
   bucket_start,
@@ -109,7 +89,7 @@ SELECT
 FROM bucketed
 GROUP BY bucket_start
 ORDER BY bucket_start DESC
-LIMIT :n_buckets;
+LIMIT $2;
 """
 
 
@@ -149,28 +129,58 @@ async def bucket(request):
 
     bucket_seconds = value * unit_map[unit]
 
-    # Use read-only connection and small busy timeout for concurrency safety
-    con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=3.0)
+    # Use PostgreSQL via psycopg/psycopg2
     try:
-        con.row_factory = sqlite3.Row
-        cur = con.cursor()
-        cur.execute("PRAGMA busy_timeout=3000;")
-        cur.execute(
-            bucket_avg_sql, {"bucket_seconds": bucket_seconds, "n_buckets": num}
-        )
+        try:
+            import psycopg
+
+            conn = psycopg.connect(PSQL_DSN)
+            use_psycopg3 = True
+        except Exception:
+            import psycopg2
+
+            conn = psycopg2.connect(PSQL_DSN)
+            use_psycopg3 = False
+    except Exception as e:
+        return JSONResponse({"error": f"psql connection failed: {e}"}, status_code=500)
+
+    try:
+        cur = conn.cursor()
+        # Execute with parameters: bucket_seconds and num
+        cur.execute(PSQL_BUCKET_SQL, (bucket_seconds, num))
         rows = cur.fetchall()
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return JSONResponse({"error": f"psql query failed: {e}"}, status_code=500)
     finally:
-        con.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     result = []
+    # Determine column indices for portability
+    # Expect columns: bucket_start, in_temp, in_humidity, out_temp, out_humidity
     for r in rows:
+        bucket_start = r[0]
+        if hasattr(bucket_start, "strftime"):
+            at_str = bucket_start.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            # If returned as string, keep as-is; else cast
+            try:
+                at_str = str(bucket_start)
+            except Exception:
+                at_str = None
         result.append(
             {
-                "at": r["bucket_start"],
-                "in_temp": r["in_temp"],
-                "in_humidity": r["in_humidity"],
-                "out_temp": r["out_temp"],
-                "out_humidity": r["out_humidity"],
+                "at": at_str,
+                "in_temp": r[1],
+                "in_humidity": r[2],
+                "out_temp": r[3],
+                "out_humidity": r[4],
             }
         )
     return JSONResponse(result)
